@@ -35,8 +35,9 @@ jobs:
     # --- 【ステップ3: JARファイルのビルド】 ---
     - name: Build with Maven
       # ./mvnw を使ってテストをスキップしながらクリーンビルドを行い、JARファイルを生成します
-      run: ./mvnw clean package -DskipTests=true
-
+      run: |
+          chmod +x mvnw
+          ./mvnw clean package -DskipTests=true
     # --- 【★追加ステップA: GitHub Actions側の現在のパブリックIPアドレスを取得】 ---
     - name: Get GitHub Actions Public IP
       id: ip
@@ -51,10 +52,17 @@ jobs:
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }} # ★ここを追記
         aws-region: ${{ secrets.AWS_REGION }}
+        web-identity-token-file: ""
+        audience: ""
 
     # --- 【★追加ステップC: EC2のセキュリティグループでポート22（SSH）を一瞬だけ開放】 ---
     - name: Authorize Security Group Ingress (Open SSH)
+
+      env:
+        AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }} # ★追加
+
       run: |
         # AWSのコマンドを使って、先ほど取得したGitHubのIPアドレス（/32）からのSSH接続を一時的に許可します
         aws ec2 authorize-security-group-ingress \
@@ -62,10 +70,6 @@ jobs:
           --protocol tcp \
           --port 22 \
           --cidr ${{ steps.ip.outputs.public_id }}/32
-    
-    # --- 【★ファイルを送る前にGitHub側で実行権限を与える】 ---
-    - name: Grant execution permission to deploy.sh
-      run: chmod +x scripts/deploy.sh
 
     # --- 【ステップ4: EC2へのファイル転送】 ---
     - name: Copy JAR and Script to EC2
@@ -81,8 +85,9 @@ jobs:
         target: "/home/ec2-user/app"
         strip_components: 0
 
-# --- 【ステップ5: EC2での起動コマンド実行】 ---
+    # --- 【ステップ5: EC2での起動コマンド実行】 ---
     - name: Execute Remote SSH Commands
+      # appleboy氏の「EC2にSSHで入り、直接コマンドを遠隔実行する」外部パーツを使います
       uses: appleboy/ssh-action@v1.0.3
       with:
         host: ${{ secrets.EC2_HOST }}
@@ -90,17 +95,15 @@ jobs:
         key: ${{ secrets.EC2_SSH_KEY }}
         port: 22
         script: |
-          # 1. 古いJavaのプロセス（以前起動したアプリ）があれば一度終了する
-          kill -9 $(pgrep -f devopsprj) 2>/dev/null || true
-          # 2. アプリの配置フォルダに移動する
-          cd /home/ec2-user/app/target
-          # 3. バックグラウンドで新しくビルドされたjarファイルを起動する
-          nohup java -jar *.jar > /home/ec2-user/app/app.log 2>&1 &
+          chmod +x /home/ec2-user/app/scripts/deploy.sh
+          /home/ec2-user/app/scripts/deploy.sh
 
     # --- 【★追加ステップD: 【最重要】何があっても必ずセキュリティグループの鍵を閉める】 ---
     - name: Revoke Security Group Ingress (Close SSH)
       # 「if: always()」を付けることで、途中のファイル転送や起動コマンドがエラーで失敗した場合でも、この閉める処理だけは絶対に強制実行させます
       if: always()
+      env:
+        AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
       run: |
         # 先ほど一時的に許可したGitHub ActionsのIPアドレスのアクセス権限を、セキュリティグループから完全に消去します
         aws ec2 revoke-security-group-ingress \
