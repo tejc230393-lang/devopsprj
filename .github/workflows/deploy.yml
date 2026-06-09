@@ -81,9 +81,8 @@ jobs:
         target: "/home/ec2-user/app"
         strip_components: 0
 
-    # --- 【ステップ5: EC2での起動コマンド実行】 ---
+# --- 【ステップ5: EC2での起動コマンド実行】 ---
     - name: Execute Remote SSH Commands
-      # appleboy氏の「EC2にSSHで入り、直接コマンドを遠隔実行する」外部パーツを使います
       uses: appleboy/ssh-action@v1.0.3
       with:
         host: ${{ secrets.EC2_HOST }}
@@ -91,8 +90,12 @@ jobs:
         key: ${{ secrets.EC2_SSH_KEY }}
         port: 22
         script: |
-          chmod +x /home/ec2-user/app/scripts/deploy.sh
-          /home/ec2-user/app/scripts/deploy.sh
+          # 1. 古いJavaのプロセス（以前起動したアプリ）があれば一度終了する
+          kill -9 $(pgrep -f devopsprj) 2>/dev/null || true
+          # 2. アプリの配置フォルダに移動する
+          cd /home/ec2-user/app/target
+          # 3. バックグラウンドで新しくビルドされたjarファイルを起動する
+          nohup java -jar *.jar > /home/ec2-user/app/app.log 2>&1 &
 
     # --- 【★追加ステップD: 【最重要】何があっても必ずセキュリティグループの鍵を閉める】 ---
     - name: Revoke Security Group Ingress (Close SSH)
